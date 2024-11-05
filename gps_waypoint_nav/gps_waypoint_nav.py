@@ -8,6 +8,11 @@ import threading
 import math
 
 class DroneWaypointNavigator(Node):
+    LINEAR_SCALE_FACTOR = 15000
+    VELOCITY_BOUND = 0.5
+    INITIAL_ALTITUDE = 5.0
+    HEADING_THRESHOLD = 4.0
+
     def __init__(self):
         super().__init__('drone_waypoint_navigator')
         
@@ -29,7 +34,7 @@ class DroneWaypointNavigator(Node):
         
         # Store current GPS and waypoint data
         self.current_gps = None
-        self.target_altitude = None
+        self.target_altitude = None  # Target altitude is fixed at 5m
         self.target_longitude = None
         self.target_latitude = None
         
@@ -56,12 +61,13 @@ class DroneWaypointNavigator(Node):
         #self.get_logger().info(f'Current GPS: {self.current_gps}')
 
     def waypoint_callback(self, msg):
-        # When a waypoint is received, set the target altitude, longitude, and latitude
+        # When a waypoint is received, set the target longitude and latitude
         with self.lock:
-            self.target_altitude = msg.altitude
             self.target_longitude = msg.longitude
             self.target_latitude = msg.latitude
-        # self.get_logger().info(f'Waypoint received with target altitude: {self.target_altitude}, longitude: {self.target_longitude}, latitude: {self.target_latitude}')
+            self.target_altitude = msg.altitude
+
+        # self.get_logger().info(f'Waypoint received with target longitude: {self.target_longitude}, latitude: {self.target_latitude}')
         
         # Start navigation to the waypoint in a separate thread
         if self.navigation_thread is None or not self.navigation_thread.is_alive():
@@ -74,44 +80,37 @@ class DroneWaypointNavigator(Node):
             rclpy.spin_once(self, timeout_sec=0.1)
 
     def navigate_to_waypoint(self):
-        if self.current_gps is None or self.target_altitude is None:
+        if self.current_gps is None or self.target_longitude is None or self.target_latitude is None or self.target_altitude is None:
             self.get_logger().warning('GPS or waypoint data is not available yet.')
             return
         
         self.get_logger().info('Navigating to waypoint...')
         velocity_command = Twist()
         
-        # Generate velocity commands to reach the target altitude
+        # Step 1: Reach the target altitude of 5m
         while True:
             with self.lock:
                 if self.current_gps is None:
                     continue
-                alt_diff = self.target_altitude - self.current_gps['altitude']
+                alt_diff = self.INITIAL_ALTITUDE - self.current_gps['altitude']
                 if abs(alt_diff) <= 0.1:
                     break
-                velocity_command.linear.z = max(min(0.5 * alt_diff, 0.5), -0.5)  # Proportional control
+                velocity_command.linear.z = max(min(0.5 * alt_diff, self.VELOCITY_BOUND), -self.VELOCITY_BOUND)  # Proportional control
             self.cmd_vel_publisher.publish(velocity_command)
             time.sleep(0.1)
         
-        self.get_logger().info('Reached waypoint, maintaining position for 5 seconds...')
-        end_time = time.time() + 5  # Maintain position for 5 seconds with corrections
-        while time.time() < end_time:
-            with self.lock:
-                alt_diff = self.target_altitude - self.current_gps['altitude']
-                velocity_command.linear.z = max(min(0.5 * alt_diff, 0.5), -0.5)
-            self.cmd_vel_publisher.publish(velocity_command)
-            time.sleep(0.1)
-        
-        # Stop publishing velocities to allow the drone to hover
+        # Stop altitude movement
         velocity_command.linear.z = 0.0
         self.cmd_vel_publisher.publish(velocity_command)
-        self.get_logger().info('Hovering at waypoint.')
-
-        # Start turning towards target longitude and latitude
+        
+        # Step 2: Turn towards the waypoint target
         self.turn_to_target()
+        
+        # Step 3: Move towards the waypoint longitude and latitude
+        self.move_to_target()
 
     def turn_to_target(self):
-        if self.current_gps is None or self.target_longitude is None or self.target_latitude is None:
+        if self.current_gps is None or self.target_longitude is None or self.target_latitude is None or self.target_altitude is None:
             self.get_logger().warning('GPS or target data is not available yet for turning.')
             return
         
@@ -123,13 +122,10 @@ class DroneWaypointNavigator(Node):
                 if self.current_gps is None:
                     continue
 
-                self.get_logger().info(f'Current GPS: {self.current_gps}')
                 # Calculate the desired heading to the target
                 delta_long = self.target_longitude - self.current_gps['longitude']
                 delta_lat = self.target_latitude - self.current_gps['latitude']
                 desired_heading = math.degrees(math.atan2(delta_long, delta_lat))
-
-                self.get_logger().info(f'desired_heading: {desired_heading}')
 
                 if desired_heading < 0:
                     desired_heading += 360
@@ -143,18 +139,68 @@ class DroneWaypointNavigator(Node):
                 #     heading_diff += 360
                 
                 # If the heading difference is small enough, stop turning
-                if abs(heading_diff) <= 5.0:
+                if abs(heading_diff) <= self.HEADING_THRESHOLD:
                     break
                 
                 # Apply proportional control to turn towards the desired heading
-                velocity_command.angular.z = abs(max(min(0.01 * heading_diff, 0.5), -0.5))
+                velocity_command.angular.z = abs(max(min(0.01 * heading_diff, self.VELOCITY_BOUND), -self.VELOCITY_BOUND))
             self.cmd_vel_publisher.publish(velocity_command)
             time.sleep(0.1)
         
-        # Stop publishing velocities to allow the drone to stabilize
+        # Stop publishing angular velocity
         velocity_command.angular.z = 0.0
         self.cmd_vel_publisher.publish(velocity_command)
-        self.get_logger().info('Reached desired heading, stabilizing.')
+        self.get_logger().info('Reached desired heading.')
+
+    def move_to_target(self):
+        self.get_logger().info('Moving towards target longitude and latitude...')
+        velocity_command = Twist()
+        
+        while True:
+            with self.lock:
+                if self.current_gps is None:
+                    continue
+                
+                # Calculate distance to the target
+                delta_long = self.target_longitude - self.current_gps['longitude']
+                delta_lat = self.target_latitude - self.current_gps['latitude']
+                distance = math.sqrt(delta_long**2 + delta_lat**2)
+                
+                # If close enough to the target, stop moving
+                if distance <= 0.00001:  # Threshold for reaching the target
+                    break
+                
+                # Move forward towards the target
+                velocity_command.linear.x = max(min(self.LINEAR_SCALE_FACTOR * distance, self.VELOCITY_BOUND), -self.VELOCITY_BOUND)
+                
+                # Check heading and adjust if necessary
+                desired_heading = math.degrees(math.atan2(delta_long, delta_lat))
+                if desired_heading < 0:
+                    desired_heading += 360
+                current_heading = self.current_gps['heading']
+                heading_diff = desired_heading - current_heading
+                
+                # if heading_diff > 180:
+                #     heading_diff -= 360
+                # elif heading_diff < -180:
+                #     heading_diff += 360
+                
+                if abs(heading_diff) > self.HEADING_THRESHOLD:
+                    # Stop forward movement and correct heading
+                    velocity_command.linear.x = 0.0
+                    velocity_command.angular.z = abs(max(min(0.01 * heading_diff, self.VELOCITY_BOUND), -self.VELOCITY_BOUND))
+                else:
+                    # Move forward with slight heading adjustment
+                    velocity_command.angular.z = 0.0
+            
+            self.cmd_vel_publisher.publish(velocity_command)
+            time.sleep(0.1)
+        
+        # Stop movement
+        velocity_command.linear.x = 0.0
+        velocity_command.angular.z = 0.0
+        self.cmd_vel_publisher.publish(velocity_command)
+        self.get_logger().info('Reached target location.')
 
 
 def main(args=None):
