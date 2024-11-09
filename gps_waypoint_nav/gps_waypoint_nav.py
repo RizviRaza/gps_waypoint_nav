@@ -2,6 +2,7 @@ import rclpy
 from rclpy.node import Node
 from sensor_msgs.msg import NavSatFix
 from std_msgs.msg import Float64MultiArray
+from std_msgs.msg import Empty
 from geometry_msgs.msg import Twist
 import time
 import threading
@@ -11,7 +12,7 @@ class DroneWaypointNavigator(Node):
     LINEAR_SCALE_FACTOR = 15000
     ALT_VELOCITY_BOUND = 1.0    # in m/s
     VELOCITY_BOUND = 0.5        # in m/s
-    INITIAL_ALTITUDE = 20.0     # in m
+    INITIAL_ALTITUDE = 60.0     # in m
     HEADING_THRESHOLD = 2.0     # in degree
     ALTITUDE_THRESHOLD = 0.1    # in m
     WAYPOINT_THRESHOLD = 0.000007
@@ -32,11 +33,24 @@ class DroneWaypointNavigator(Node):
             self.waypoint_callback,
             10)
         
+        self.origin_subscription = self.create_subscription(
+            Float64MultiArray,
+            '/setOriginLocation',
+            self.origin_callback,
+            10)
+        
+        self.return_home_subscription = self.create_subscription(
+            Empty,
+            '/mavic_1/return_home',
+            self.return_home_callback,
+            10)
+        
         # Publisher
         self.cmd_vel_publisher = self.create_publisher(Twist, '/mavic_1/cmd_vel', 10)
         
         # Store current GPS and waypoint data
         self.current_gps = None
+        self.origin_gps = None
         self.target_altitude = None  # Target altitude is fixed at 5m
         self.target_longitude = None
         self.target_latitude = None
@@ -54,7 +68,6 @@ class DroneWaypointNavigator(Node):
         self.navigation_thread = None
 
     def gps_callback(self, msg):
-
         # Ensure the GPS data has the correct number of elements
         if len(msg.data) < 4:
             self.get_logger().error('GPS data does not have enough elements. Expected 4.')
@@ -71,7 +84,6 @@ class DroneWaypointNavigator(Node):
         #self.get_logger().info(f'Current GPS: {self.current_gps}')
 
     def waypoint_callback(self, msg):
-
         if len(msg.data) < 4:
             self.get_logger().error('Waypoint data does not have enough elements. Expected 4.')
             return
@@ -83,11 +95,42 @@ class DroneWaypointNavigator(Node):
             self.target_altitude = msg.data[2]
             self.target_heading = msg.data[3]
 
-        # self.get_logger().info(f'Waypoint received with target longitude: {self.target_longitude}, latitude: {self.target_latitude}')
-        
         # Start navigation to the waypoint in a separate thread
         if self.navigation_thread is None or not self.navigation_thread.is_alive():
-            self.navigation_thread = threading.Thread(target=self.navigate_to_waypoint)
+            target_gps = {
+                'longitude': self.target_longitude,
+                'latitude': self.target_latitude,
+                'altitude': self.target_altitude,
+                'heading': self.target_heading
+            }
+            self.navigation_thread = threading.Thread(target=self.navigate_to_waypoint, args=(target_gps,))
+            self.navigation_thread.start()
+
+    def origin_callback(self, msg):
+        # Ensure the GPS data has the correct number of elements
+        if len(msg.data) < 4:
+            self.get_logger().error('Origin data does not have enough elements. Expected 4.')
+            return
+    
+        # Update the origin GPS data: Lon, Lat, Alt, heading
+        with self.lock:
+            self.origin_gps = {
+                'longitude': msg.data[0],
+                'latitude': msg.data[1],
+                'altitude': 0.0,
+                'heading': msg.data[3]
+            }
+        self.get_logger().info(f'Origin GPS: {self.origin_gps}')
+
+    def return_home_callback(self, msg):
+        self.get_logger().info('Return home command received.')
+        if self.origin_gps is None:
+            self.get_logger().warning('Origin GPS data is not available.')
+            return
+
+        # Start navigation to the origin in a separate thread
+        if self.navigation_thread is None or not self.navigation_thread.is_alive():
+            self.navigation_thread = threading.Thread(target=self.navigate_to_waypoint, args=(self.origin_gps,))
             self.navigation_thread.start()
 
     def gps_listener_thread(self):
@@ -115,8 +158,8 @@ class DroneWaypointNavigator(Node):
         self.cmd_vel_publisher.publish(velocity_command)
         self.get_logger().info('Reached target altitude.')
 
-    def navigate_to_waypoint(self):
-        if self.current_gps is None or self.target_longitude is None or self.target_latitude is None or self.target_altitude is None:
+    def navigate_to_waypoint(self, target_gps):
+        if self.current_gps is None or target_gps is None:
             self.get_logger().warning('GPS or waypoint data is not available yet.')
             return
         
@@ -127,8 +170,8 @@ class DroneWaypointNavigator(Node):
         
         # Step 2: Calculate the desired heading to the target
         with self.lock:
-            delta_long = self.target_longitude - self.current_gps['longitude']
-            delta_lat = self.target_latitude - self.current_gps['latitude']
+            delta_long = target_gps['longitude'] - self.current_gps['longitude']
+            delta_lat = target_gps['latitude'] - self.current_gps['latitude']
             desired_heading = math.degrees(math.atan2(delta_long, delta_lat))
             if desired_heading < 0:
                 desired_heading += 360
@@ -137,21 +180,20 @@ class DroneWaypointNavigator(Node):
         self.turn_to_target(desired_heading)
         
         # Step 4: Move towards the waypoint longitude and latitude
-        self.move_to_target(self.target_longitude, self.target_latitude)
+        self.move_to_target(target_gps['longitude'], target_gps['latitude'])
 
-        # Step 6: Rotate to target heading
-        self.turn_to_target(self.target_heading)
+        # Step 5: Rotate to target heading
+        self.turn_to_target(target_gps['heading'])
         
-        # Step 5: Decend to the target altitude
-        self.reach_target_altitude(self.target_altitude)
-
+        # Step 6: Descend to the target altitude
+        self.reach_target_altitude(target_gps['altitude'])
 
     def turn_to_target(self, desired_heading):
         if self.current_gps is None:
             self.get_logger().warning('GPS or target data is not available yet for turning.')
             return
         
-        self.get_logger().info('Turning towards target longitude and latitude...')
+        self.get_logger().info('Turning towards target heading...')
         velocity_command = Twist()
         
         while True:
@@ -187,14 +229,11 @@ class DroneWaypointNavigator(Node):
                 delta_lat = target_latitude - self.current_gps['latitude']
                 distance = math.sqrt(delta_long**2 + delta_lat**2)
                 
-                # If close enough to the target, stop moving
-                if distance <= self.WAYPOINT_THRESHOLD:  # Threshold for reaching the target
+                if distance <= self.WAYPOINT_THRESHOLD:
                     break
                 
-                # Move forward towards the target
                 velocity_command.linear.x = max(min(self.LINEAR_SCALE_FACTOR * distance, self.VELOCITY_BOUND), -self.VELOCITY_BOUND)
                 
-                # Check heading and adjust if necessary
                 desired_heading = math.degrees(math.atan2(delta_long, delta_lat))
                 if desired_heading < 0:
                     desired_heading += 360
@@ -202,17 +241,14 @@ class DroneWaypointNavigator(Node):
                 heading_diff = desired_heading - current_heading
                 
                 if abs(heading_diff) > self.HEADING_THRESHOLD:
-                    # Stop forward movement and correct heading
                     velocity_command.linear.x = 0.0
                     velocity_command.angular.z = abs(max(min(0.01 * heading_diff, self.VELOCITY_BOUND), -self.VELOCITY_BOUND))
                 else:
-                    # Move forward with slight heading adjustment
                     velocity_command.angular.z = 0.0
             
             self.cmd_vel_publisher.publish(velocity_command)
             time.sleep(0.1)
         
-        # Stop movement
         velocity_command.linear.x = 0.0
         velocity_command.angular.z = 0.0
         self.cmd_vel_publisher.publish(velocity_command)
