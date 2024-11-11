@@ -47,6 +47,8 @@ class DroneWaypointNavigator(Node):
         
         # Publisher
         self.cmd_vel_publisher = self.create_publisher(Twist, '/mavic_1/cmd_vel', 10)
+
+        self.land_publisher = self.create_publisher(Empty, '/mavic_1/land', 10)
         
         # Store current GPS and waypoint data
         self.current_gps = None
@@ -186,6 +188,11 @@ class DroneWaypointNavigator(Node):
         self.turn_to_target(target_gps['heading'])
         
         # Step 6: Descend to the target altitude
+
+        if target_gps['altitude'] == 0.0:           # Not tested yet
+            self.land_publisher.publish(Empty())
+            return
+
         self.reach_target_altitude(target_gps['altitude'])
 
     def turn_to_target(self, desired_heading):
