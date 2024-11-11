@@ -12,7 +12,7 @@ class DroneWaypointNavigator(Node):
     LINEAR_SCALE_FACTOR = 15000
     ALT_VELOCITY_BOUND = 1.0    # in m/s
     VELOCITY_BOUND = 0.5        # in m/s
-    INITIAL_ALTITUDE = 60.0     # in m
+    INITIAL_ALTITUDE = 5.0     # in m
     HEADING_THRESHOLD = 2.0     # in degree
     ALTITUDE_THRESHOLD = 0.1    # in m
     WAYPOINT_THRESHOLD = 0.000007
@@ -51,7 +51,7 @@ class DroneWaypointNavigator(Node):
         # Store current GPS and waypoint data
         self.current_gps = None
         self.origin_gps = None
-        self.target_altitude = None  # Target altitude is fixed at 5m
+        self.target_altitude = None
         self.target_longitude = None
         self.target_latitude = None
         self.target_heading = None
@@ -115,8 +115,8 @@ class DroneWaypointNavigator(Node):
         # Update the origin GPS data: Lon, Lat, Alt, heading
         with self.lock:
             self.origin_gps = {
-                'longitude': msg.data[0],
-                'latitude': msg.data[1],
+                'longitude': msg.data[1],
+                'latitude': msg.data[0],
                 'altitude': 0.0,
                 'heading': msg.data[3]
             }
