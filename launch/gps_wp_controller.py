@@ -8,7 +8,7 @@ def generate_launch_description():
     return LaunchDescription([
         DeclareLaunchArgument(
             'ROS_IP',
-            default_value='10.36.215.213',
+            default_value='192.168.0.5',
             description='IP address to bind the TCP server to'
         ),
         DeclareLaunchArgument(
@@ -49,5 +49,13 @@ def generate_launch_description():
             parameters=[
                 {'ffmpeg_image_transport.map.hevc_nvenc': 'hevc'}
             ]
+        ),
+
+        Node(
+            package='rqt_image_view',
+            executable='rqt_image_view',
+            name='rqt_image_view',
+            output='screen',
+            arguments=['/mavic_1/decoded']
         )
     ])
