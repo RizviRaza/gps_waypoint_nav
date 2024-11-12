@@ -209,12 +209,18 @@ class DroneWaypointNavigator(Node):
                     continue
                 
                 current_heading = self.current_gps['heading']
-                heading_diff = desired_heading - current_heading
+                heading_diff = (desired_heading - current_heading + 360) % 360
+
+                # heading_diff = desired_heading - current_heading
+                
+                # Determine the shortest rotation direction
+                if heading_diff > 180:
+                    heading_diff -= 360  # Rotate counterclockwise
                 
                 if abs(heading_diff) <= self.HEADING_THRESHOLD:
                     break
                 
-                velocity_command.angular.z = abs(max(min(0.01 * heading_diff, self.VELOCITY_BOUND), -self.VELOCITY_BOUND))
+                velocity_command.angular.z = -max(min(0.01 * heading_diff, self.VELOCITY_BOUND), -self.VELOCITY_BOUND)
             self.cmd_vel_publisher.publish(velocity_command)
             time.sleep(0.1)
         
