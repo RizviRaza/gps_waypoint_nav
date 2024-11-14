@@ -12,7 +12,7 @@ class DroneWaypointNavigator(Node):
     LINEAR_SCALE_FACTOR = 15000
     ALT_VELOCITY_BOUND = 1.0    # in m/s
     VELOCITY_BOUND = 0.5        # in m/s
-    INITIAL_ALTITUDE = 5.0     # in m
+    INITIAL_ALTITUDE = 60.0     # in m
     HEADING_THRESHOLD = 2.0     # in degree
     ALTITUDE_THRESHOLD = 0.1    # in m
     WAYPOINT_THRESHOLD = 0.000007
@@ -29,7 +29,7 @@ class DroneWaypointNavigator(Node):
         
         self.waypoint_subscription = self.create_subscription(
             Float64MultiArray,
-            '/waypoint',
+            '/towereye_wp',
             self.waypoint_callback,
             10)
         
