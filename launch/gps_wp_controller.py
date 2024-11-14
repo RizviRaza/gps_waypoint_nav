@@ -88,7 +88,7 @@ def generate_launch_description():
             output='screen',                   # Output configuration
             arguments=[
                 '/remote/cmd_vel',      # Source topic
-                '/mavic_1/vel_cmd'      # Target topic
+                '/mavic_1/cmd_vel'      # Target topic
             ]
         )
     ])
