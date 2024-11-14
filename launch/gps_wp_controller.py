@@ -84,11 +84,11 @@ def generate_launch_description():
         Node(
             package='topic_tools',             # The package name
             executable='relay',                # The executable name
-            name='mavic_cmd_vel_relay',       # Optional: node name
+            name='mavic_cmd_relay',       # Optional: node name
             output='screen',                   # Output configuration
             arguments=[
                 '/remote/cmd_vel',      # Source topic
                 '/mavic_1/cmd_vel'      # Target topic
             ]
-        )
+        ),
     ])
