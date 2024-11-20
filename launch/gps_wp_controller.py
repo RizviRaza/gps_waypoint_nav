@@ -6,28 +6,6 @@ from launch.substitutions import LaunchConfiguration
 
 def generate_launch_description():
     return LaunchDescription([
-        # DeclareLaunchArgument(
-        #     'ROS_IP',
-        #     default_value='192.168.0.5',
-        #     description='IP address to bind the TCP server to'
-        # ),
-        # DeclareLaunchArgument(
-        #     'ROS_TCP_PORT',
-        #     default_value='10000',
-        #     description='Port number for the TCP server'
-        # ),
-        
-        # Node(
-        #     package='ros_tcp_endpoint',
-        #     executable='default_server_endpoint',
-        #     name='unity_endpoint',
-        #     output='screen',
-        #     parameters=[
-        #         {'ROS_IP': LaunchConfiguration('ROS_IP')},
-        #         {'ROS_TCP_PORT': LaunchConfiguration('ROS_TCP_PORT')}
-        #     ]
-        # ),
-
         Node(
             package='gps_waypoint_nav',
             executable='gps_waypoint_nav',

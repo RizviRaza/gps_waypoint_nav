@@ -6,7 +6,7 @@ package_name = 'gps_waypoint_nav'
 
 setup(
     name=package_name,
-    version='0.0.0',
+    version='1.0.0',
     packages=find_packages(exclude=['test']),
     data_files=[
         ('share/ament_index/resource_index/packages',
@@ -18,7 +18,7 @@ setup(
     zip_safe=True,
     maintainer='raza',
     maintainer_email='smrazarizvi96@gmail.com',
-    description='TODO: Package description',
+    description='ROS2 package for GPS Waypoint navigation with velocity commands',
     license='TODO: License declaration',
     tests_require=['pytest'],
     entry_points={
