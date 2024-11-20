@@ -2,7 +2,9 @@
 This is a ROS2 package for GPS Waypoint navigation with velocity commands.
 The package was initially developed for a DJI Mavic 3E drone, but it can be used with any drone as long as the ROS Topics are respected.
 
-- Checked with ROS2 Humble
+# Build Environment
+- Ubuntu 20.04
+- ROS2 Humble
 
 # Features
 - Receives the drone's current GPS location with heading.
