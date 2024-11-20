@@ -7,6 +7,7 @@ from geometry_msgs.msg import Twist
 import time
 import threading
 import math
+from rclpy.qos import QoSProfile, QoSReliabilityPolicy
 
 class DroneWaypointNavigator(Node):
     LINEAR_SCALE_FACTOR = 15000
@@ -43,7 +44,8 @@ class DroneWaypointNavigator(Node):
             Empty,
             '/mavic_1/return_home',
             self.return_home_callback,
-            10)
+	    qos_profile=QoSProfile(reliability=QoSReliabilityPolicy.BEST_EFFORT, depth=10)
+            )
         
         # Publisher
         self.cmd_vel_publisher = self.create_publisher(Twist, '/mavic_1/cmd_vel', 10)
