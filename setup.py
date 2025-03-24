@@ -24,6 +24,7 @@ setup(
     entry_points={
         'console_scripts': [
             'gps_waypoint_nav = gps_waypoint_nav.gps_waypoint_nav:main',
+            'inside_tower_nav = gps_waypoint_nav.inside_tower_nav:main',
         ],
     },
 )
