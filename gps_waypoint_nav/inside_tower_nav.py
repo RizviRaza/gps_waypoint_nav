@@ -3,14 +3,15 @@ from rclpy.node import Node
 from geometry_msgs.msg import Twist
 from sensor_msgs.msg import LaserScan
 from rclpy.qos import QoSProfile, QoSReliabilityPolicy
-import math
 import numpy as np
+from scipy.ndimage import median_filter
+import math
 
 class DroneSafetyController(Node):
     def __init__(self):
-        super().__init__('inside_tower_nav_node')
+        super().__init__('drone_safety_controller')
 
-        # Declare all parameters with default values
+        # Parameters
         self.declare_parameters(namespace='',
             parameters=[
                 ('cmd_vel_topic', '/cmd_vel'),
@@ -21,7 +22,8 @@ class DroneSafetyController(Node):
                 ('forward_speed', 0.3),  # m/s
                 ('lateral_speed', 0.2),  # m/s
                 ('rotation_speed', 0.3),  # rad/s
-                ('search_rotation_speed', 0.5)  # rad/s when searching
+                ('median_window_size', 7),  # Filter window size (odd)
+                ('min_obstacle_points', 2)  # Min consecutive points to consider as obstacle
             ])
 
         # Get parameters
@@ -33,7 +35,8 @@ class DroneSafetyController(Node):
         self.FORWARD_SPEED = self.get_parameter('forward_speed').value
         self.LATERAL_SPEED = self.get_parameter('lateral_speed').value
         self.ROTATION_SPEED = self.get_parameter('rotation_speed').value
-        self.SEARCH_ROTATION_SPEED = self.get_parameter('search_rotation_speed').value
+        self.MEDIAN_WINDOW = self.get_parameter('median_window_size').value
+        self.MIN_POINTS = self.get_parameter('min_obstacle_points').value
 
         # Subscribers and Publisher
         self.cmd_vel_sub = self.create_subscription(
@@ -50,77 +53,114 @@ class DroneSafetyController(Node):
 
         # Variables
         self.latest_cmd_vel = Twist()
-        self.laserscan_data = None
 
     def cmd_vel_callback(self, msg):
         self.latest_cmd_vel = msg
 
-    def laserscan_callback(self, msg):
-        self.laserscan_data = msg
-        ranges = np.array(msg.ranges)
+    def filter_ranges(self, ranges):
+        """Apply median filtering and handle invalid values."""
+        # Replace inf/nan with large value for filtering
+        clean_ranges = np.where(np.isfinite(ranges), ranges, 10e6)
+        # Apply median filter
+        filtered = median_filter(clean_ranges, size=self.MEDIAN_WINDOW, mode='mirror')
+        # Restore inf for originally invalid points
+        return np.where(np.isfinite(ranges), filtered, float('inf'))
 
-        # Define regions (indices)
+    def has_valid_obstacle(self, region_ranges):
+        """Check if at least MIN_POINTS consecutive points are below threshold."""
+        count = 0
+        for r in region_ranges:
+            if r < self.OBSTACLE_THRESHOLD and not math.isinf(r):
+                count += 1
+                if count >= self.MIN_POINTS:
+                    return True
+            else:
+                count = 0
+        return False
+
+    def laserscan_callback(self, msg):
+        # Convert to numpy array and apply median filtering
+        raw_ranges = np.array(msg.ranges)
+        ranges = self.filter_ranges(raw_ranges)
+
+        # Define regions (indices and angle ranges)
         regions = {
-            'front_right': (0, 55),
-            'right': (55, 125),
-            'back_right': (125, 180),
-            'back_left': (180, 235),
-            'left': (235, 305),
-            'front_left': (305, 360)
+            'front_right': {'indices': range(0, 55), 'angle_range': (0, 54)},
+            'right': {'indices': range(55, 125), 'angle_range': (55, 124)},
+            'back_right': {'indices': range(125, 180), 'angle_range': (125, 179)},
+            'back_left': {'indices': range(180, 235), 'angle_range': (180, 234)},
+            'left': {'indices': range(235, 305), 'angle_range': (235, 304)},
+            'front_left': {'indices': range(305, 360), 'angle_range': (305, 359)}
         }
 
-        # Get valid ranges for each region
-        region_data = {}
-        for name, (start, end) in regions.items():
-            region_ranges = ranges[start:end]
-            valid_ranges = region_ranges[(region_ranges > 0) & (region_ranges < float('inf'))]
-            region_data[name] = {
-                'min_distance': np.min(valid_ranges) if valid_ranges.size > 0 else float('inf'),
-                'average_distance': np.mean(valid_ranges) if valid_ranges.size > 0 else float('inf')
-            }
+        # Analyze regions
+        valid_regions = []
+        for name, region_info in regions.items():
+            region_ranges = ranges[list(region_info['indices'])]
+            valid_points = [(i, r) for i, r in enumerate(region_ranges) 
+                        if not (math.isinf(r) or math.isnan(r))]
+            
+            if len(valid_points) > 0:
+                # Find the point with minimum distance in this region
+                min_idx, min_dist = min(valid_points, key=lambda x: x[1])
+                
+                # Check for nearby similar points (cluster detection)
+                cluster_points = 1
+                cluster_threshold = min_dist * 0.2  # 20% of min distance
+                
+                # Check points before min index
+                i = min_idx - 1
+                while i >= 0 and abs(region_ranges[i] - min_dist) <= cluster_threshold:
+                    cluster_points += 1
+                    i -= 1
+                
+                # Check points after min index
+                i = min_idx + 1
+                while i < len(region_ranges) and abs(region_ranges[i] - min_dist) <= cluster_threshold:
+                    cluster_points += 1
+                    i += 1
+                
+                # Only consider if we have a cluster (not isolated point)
+                if cluster_points >= self.MIN_POINTS:
+                    # Calculate angle and convert to counter-clockwise if > 180
+                    raw_angle = (region_info['angle_range'][0] + min_idx) * msg.angle_increment
+                    angle = math.degrees(raw_angle)
+                    if angle > 180:
+                        angle = 360 - angle  # Convert to counter-clockwise equivalent
+                        angle_direction = "CCW"
+                    else:
+                        angle_direction = "CW"
+                    
+                    # angle = math.degrees((region_info['angle_range'][0] + min_idx) * msg.angle_increment)
+                    valid_regions.append({
+                        'name': name,
+                        'min_distance': min_dist,
+                        'angle': angle,
+                        'cluster_size': cluster_points
+                    })
 
-        # Find R1 and R2 (two regions with smallest min distances)
-        sorted_regions = sorted(region_data.items(), key=lambda x: x[1]['min_distance'])
-        R1_name, R1_data = sorted_regions[0]
-        R2_name, R2_data = sorted_regions[1]
+        # Sort regions by minimum distance
+        valid_regions.sort(key=lambda x: x['min_distance'])
 
-        self.get_logger().info(
-            f"Closest regions: {R1_name} ({R1_data['min_distance']:.2f}m), "
-            f"{R2_name} ({R2_data['min_distance']:.2f}m)"
-        )
-
-        # Initialize command with all zeros
-        # cmd_vel = Twist()
-        # cmd_vel.linear.x = 0.0
-        # cmd_vel.linear.y = 0.0
-        # cmd_vel.angular.z = 0.0
-
-        # # Case 1: Both R1 and R2 are front regions
-        # if {R1_name, R2_name} == {'front_left', 'front_right'}:
-        #     if abs(R1_data['min_distance'] - R2_data['min_distance']) > self.NEGLIGIBLE_DIFF:
-        #         # Move laterally toward the region with larger distance
-        #         if R1_data['min_distance'] > R2_data['min_distance']:
-        #             cmd_vel.linear.y = -self.LATERAL_SPEED  # Move left (toward front_left)
-        #         else:
-        #             cmd_vel.linear.y = self.LATERAL_SPEED   # Move right (toward front_right)
-        #     else:
-        #         # Safe to move forward
-        #         cmd_vel.linear.x = self.FORWARD_SPEED
-        # else:
-        #     # Case 2: Not both front regions - rotate toward R1
-        #     if R1_name.endswith('right'):
-        #         cmd_vel.angular.z = -self.ROTATION_SPEED  # Rotate right (clockwise)
-        #     elif R1_name.endswith('left'):
-        #         cmd_vel.angular.z = self.ROTATION_SPEED   # Rotate left (counter-clockwise)
-        #     else:
-        #         # For back regions, still rotate toward R1
-        #         if 'right' in R1_name:
-        #             cmd_vel.angular.z = -self.ROTATION_SPEED
-        #         else:
-        #             cmd_vel.angular.z = self.ROTATION_SPEED
-
-        # # Publish the command
-        # self.cmd_vel_pub.publish(cmd_vel)
+        # Print information for R1 and R2
+        if len(valid_regions) >= 2:
+            R1, R2 = valid_regions[0], valid_regions[1]
+            self.get_logger().info(
+                "Closest obstacles:\n"
+                f"R1: {R1['name']} | Distance: {R1['min_distance']:.2f}m | "
+                f"Angle: {R1['angle']:.1f}° | Cluster: {R1['cluster_size']} points\n"
+                f"R2: {R2['name']} | Distance: {R2['min_distance']:.2f}m | "
+                f"Angle: {R2['angle']:.1f}° | Cluster: {R2['cluster_size']} points"
+            )
+        elif len(valid_regions) == 1:
+            R1 = valid_regions[0]
+            self.get_logger().info(
+                f"Single obstacle detected:\n"
+                f"R1: {R1['name']} | Distance: {R1['min_distance']:.2f}m | "
+                f"Angle: {R1['angle']:.1f}° | Cluster: {R1['cluster_size']} points"
+            )
+        else:
+            self.get_logger().warn("No valid obstacle clusters detected")
 
 def main(args=None):
     rclpy.init(args=args)
