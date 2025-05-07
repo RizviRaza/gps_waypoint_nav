@@ -17,7 +17,7 @@ def generate_launch_description():
     )
     cmd_vel_safe_topic_arg = DeclareLaunchArgument(
         'cmd_vel_safe_topic',
-        default_value='/mavic_1/cmd_vel_safe',
+        default_value='/mavic_1/cmd_vel',
         description='Topic name for outgoing safe cmd_vel messages'
     )
 
