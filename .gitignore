@@ -1,0 +1,48 @@
+# ========== GCP Credentials ==========
+# Service account keys (NEVER COMMIT!)
+key/*.json
+*-key.json
+*_key.json
+ros-team-key.json
+service-account-key.json
+gcp-credentials.json
+
+# ========== Python ==========
+__pycache__/
+*.py[cod]
+*$py.class
+*.pyc
+.pytest_cache/
+*.egg-info/
+dist/
+build/
+
+# Virtual environments
+venv/
+env/
+ENV/
+.venv/
+
+# ========== IDEs ==========
+.vscode/
+.idea/
+*.iml
+*.code-workspace
+
+# ========== OS ==========
+.DS_Store
+.AppleDouble
+.LSOverride
+Thumbs.db
+Desktop.ini
+*~
+
+# ========== Logs ==========
+*.log
+logs/
+
+# ========== Temporary files ==========
+*.tmp
+*.temp
+*.swp
+*.swo
