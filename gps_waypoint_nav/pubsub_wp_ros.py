@@ -83,7 +83,7 @@ class PubSubListener(Node):
         self.subscriber = pubsub_v1.SubscriberClient()
 
         # ---- Optional ROS publishers ----
-        self.pub_gps = self.create_publisher(Float64MultiArray, "/towereye_wp", 10) if self.publish_ros else None
+        self.pub_gps = self.create_publisher(Float64MultiArray, "/mavic_1/towereye_wp", 10) if self.publish_ros else None
         self.pub_utm = self.create_publisher(Float64MultiArray, "/cviss/waypoints/utm", 10) if self.publish_ros else None
         self.pub_colmap = self.create_publisher(Float64MultiArray, "/cviss/waypoints/colmap", 10) if self.publish_ros else None
 
@@ -114,6 +114,51 @@ class PubSubListener(Node):
             if self._streaming_future is not None:
                 self._streaming_future.cancel()
                 self._streaming_future = None
+                
+        # ---------- Batch helpers ----------
+    @staticmethod
+    def _to_float(v, default=0.0):
+        try:
+            return float(v)
+        except (TypeError, ValueError):
+            return float(default)
+
+    @staticmethod
+    def _iter_payload_items(data):
+        """
+        Normalize incoming payloads to an iterable of 'items', each containing
+        either a 'coordinates' dict or the fields directly.
+
+        Supports:
+        - Single object with 'coordinates': {...}
+        - Single object with the fields directly
+        - Array of such objects (top-level list)
+        - Object with arrays under keys: 'items', 'batch', 'waypoints'
+        - Object with 'coordinates' being a list of coordinate dicts
+        """
+        # 1) List at top level
+        if isinstance(data, list):
+            for itm in data:
+                yield itm
+            return
+
+        # 2) Known list-like container keys
+        for key in ("items", "batch", "waypoints", "messages"):
+            if isinstance(data, dict) and isinstance(data.get(key), list):
+                for itm in data[key]:
+                    yield itm
+                return
+
+        # 3) coordinates is a list
+        if isinstance(data, dict) and isinstance(data.get("coordinates"), list):
+            for c in data["coordinates"]:
+                # wrap each coordinate dict into an item shape
+                yield {"coordinates": c}
+            return
+
+        # 4) Fallback: treat the whole object as a single item
+        yield data
+
 
     # ------------- Mode management -------------
 
@@ -195,139 +240,120 @@ class PubSubListener(Node):
     def _cb_gps(self, message: pubsub_v1.subscriber.message.Message):
         try:
             data = json.loads(message.data.decode("utf-8"))
+
+            flat = []  # concatenated output
+            count = 0
+            for item in self._iter_payload_items(data):
+                coords = item.get("coordinates", item) or {}
+
+                lon = self._to_float(coords.get("longitude", 0.0))
+                lat = self._to_float(coords.get("latitude", 0.0))
+                alt = self._to_float(coords.get("altitude", 0.0))
+                azm = self._to_float(coords.get("azimuth", 0.0))
+
+                flat.extend([lon, lat, alt, azm])
+                count += 1
+
             self.get_logger().info("\n" + pretty_line())
-            self.get_logger().info("📡 [GPS Message Received] - For Drone")
+            self.get_logger().info(f"📡 [GPS Message Received] items={count}")
             self.get_logger().info(pretty_line())
-            self.get_logger().info(f"Waypoint ID: {data.get('waypointId', 'N/A')}")
+            if count == 1:
+                self.get_logger().info(f"Single: [lon,lat,alt,az]= {flat}")
+            else:
+                self.get_logger().info(f"Batch flattened length={len(flat)}")
 
-            coords = data.get("coordinates", {})
-            lon = coords.get("longitude")
-            lat = coords.get("latitude")
-            alt = coords.get("altitude")
-            azm = coords.get("azimuth")
-
-            self.get_logger().info("\n🌍 GPS Coordinates (WGS84):")
-            self.get_logger().info(f"   Longitude: {lon}")
-            self.get_logger().info(f"   Latitude:  {lat}")
-            self.get_logger().info(f"   Altitude:  {alt} m")
-            self.get_logger().info(f"   Azimuth:   {azm}°")
-
-            if "timestamp" in data:
-                self.get_logger().info(f"\n⏰ Timestamp: {data['timestamp']}")
-
-            self.get_logger().info("\n✅ Message processed")
-            self.get_logger().info(pretty_line())
-
-            # ✅ Publish as Float64MultiArray
             if self.publish_ros and self.pub_gps is not None:
                 msg = Float64MultiArray()
-                # Order: [longitude, latitude, altitude, azimuth]
-                msg.data = [float(lon), float(lat), float(alt), float(azm)]
+                msg.data = flat
                 self.pub_gps.publish(msg)
-                self.get_logger().info(f"📤 Published /towereye_wp: {msg.data}")
+                self.get_logger().info(f"📤 Published /mavic_1/towereye_wp: {msg.data}")
 
             message.ack()
+
         except Exception as e:
-            self.get_logger().error(f"❌ Error occurred: {e}")
+            self.get_logger().error(f"❌ Error occurred in _cb_gps: {e}")
             message.nack()
 
     def _cb_utm(self, message: pubsub_v1.subscriber.message.Message):
         try:
             data = json.loads(message.data.decode("utf-8"))
+
+            flat = []
+            count = 0
+            for item in self._iter_payload_items(data):
+                coords = item.get("coordinates", item) or {}
+
+                x = self._to_float(coords.get("x", 0.0))
+                y = self._to_float(coords.get("y", 0.0))
+                z = self._to_float(coords.get("z", 0.0))
+                azm = self._to_float(coords.get("azimuth", 0.0))
+
+                flat.extend([x, y, z, azm])
+                count += 1
+
             self.get_logger().info("\n" + pretty_line())
-            self.get_logger().info("📡 [UTM Message Received] - For Robot")
+            self.get_logger().info(f"📡 [UTM Message Received] items={count}")
             self.get_logger().info(pretty_line())
-            self.get_logger().info(f"Waypoint ID: {data.get('waypointId', 'N/A')}")
-
-            coords = data.get("coordinates", {})
-            x = coords.get("x", 0.0)
-            y = coords.get("y", 0.0)
-            z = coords.get("z", 0.0)
-            azm = coords.get("azimuth", 0.0)
-            try:
-                x = float(x); y = float(y); z = float(z); azm = float(azm)
-            except (ValueError, TypeError):
-                self.get_logger().warn(f"⚠️ Some UTM fields not numeric: {coords}")
-
-            self.get_logger().info("\n📍 UTM Coordinates (Zone 17N):")
-            self.get_logger().info(f"   X (Easting):  {x} m")
-            self.get_logger().info(f"   Y (Northing): {y} m")
-            self.get_logger().info(f"   Z (Altitude): {z} m")
-            self.get_logger().info(f"   Azimuth:      {azm}°")
-
-            if "timestamp" in data:
-                self.get_logger().info(f"\n⏰ Timestamp: {data['timestamp']}")
-
-            self.get_logger().info("\n✅ Message processed")
-            self.get_logger().info(pretty_line())
+            if count == 1:
+                self.get_logger().info(f"Single: [x,y,z,az]= {flat}")
+            else:
+                self.get_logger().info(f"Batch flattened length={len(flat)}")
 
             if self.publish_ros and self.pub_utm is not None:
                 msg = Float64MultiArray()
-                msg.data = [x, y, z, azm]  # order fixed
+                msg.data = flat
                 self.pub_utm.publish(msg)
                 self.get_logger().info(f"📤 Published /cviss/waypoints/utm: {msg.data}")
 
             message.ack()
+
         except Exception as e:
             self.get_logger().error(f"❌ Error occurred in _cb_utm: {e}")
             message.nack()
 
-
     def _cb_colmap(self, message: pubsub_v1.subscriber.message.Message):
         try:
             data = json.loads(message.data.decode("utf-8"))
+
+            flat = []
+            count = 0
+            for item in self._iter_payload_items(data):
+                coords = item.get("coordinates", item) or {}
+                position = coords.get("position", {})
+                rotation = coords.get("rotation", {})
+
+                px = self._to_float(position.get("x", 0.0))
+                py = self._to_float(position.get("y", 0.0))
+                pz = self._to_float(position.get("z", 0.0))
+
+                # quaternion defaults to identity
+                qw = self._to_float(rotation.get("w", 1.0))
+                qx = self._to_float(rotation.get("x", 0.0))
+                qy = self._to_float(rotation.get("y", 0.0))
+                qz = self._to_float(rotation.get("z", 0.0))
+
+                flat.extend([px, py, pz, qw, qx, qy, qz])
+                count += 1
+
             self.get_logger().info("\n" + pretty_line())
-            self.get_logger().info("📡 [COLMAP Message Received] - For Robot (Original)")
+            self.get_logger().info(f"📡 [COLMAP Message Received] items={count}")
             self.get_logger().info(pretty_line())
-            self.get_logger().info(f"Waypoint ID: {data.get('waypointId', 'N/A')}")
-
-            coords = data.get("coordinates", {})
-            position = coords.get("position", {})
-            rotation = coords.get("rotation", {})
-
-            px = position.get("x", 0.0)
-            py = position.get("y", 0.0)
-            pz = position.get("z", 0.0)
-            qw = rotation.get("w", 1.0)
-            qx = rotation.get("x", 0.0)
-            qy = rotation.get("y", 0.0)
-            qz = rotation.get("z", 0.0)
-
-            try:
-                px = float(px); py = float(py); pz = float(pz)
-                qw = float(qw); qx = float(qx); qy = float(qy); qz = float(qz)
-            except (ValueError, TypeError):
-                self.get_logger().warn(f"⚠️ Some COLMAP fields not numeric: position={position}, rotation={rotation}")
-
-            self.get_logger().info("\n📍 COLMAP Position:")
-            self.get_logger().info(f"   X: {px}")
-            self.get_logger().info(f"   Y: {py}")
-            self.get_logger().info(f"   Z: {pz}")
-
-            self.get_logger().info("\n🔄 COLMAP Rotation (Quaternion):")
-            self.get_logger().info(f"   W: {qw}")
-            self.get_logger().info(f"   X: {qx}")
-            self.get_logger().info(f"   Y: {qy}")
-            self.get_logger().info(f"   Z: {qz}")
-
-            if "timestamp" in data:
-                self.get_logger().info(f"\n⏰ Timestamp: {data['timestamp']}")
-
-            self.get_logger().info("\n✅ Message processed")
-            self.get_logger().info(pretty_line())
+            if count == 1:
+                self.get_logger().info(f"Single: [px,py,pz,qw,qx,qy,qz]= {flat}")
+            else:
+                self.get_logger().info(f"Batch flattened length={len(flat)}")
 
             if self.publish_ros and self.pub_colmap is not None:
                 msg = Float64MultiArray()
-                # order: [px, py, pz, qw, qx, qy, qz]
-                msg.data = [px, py, pz, qw, qx, qy, qz]
+                msg.data = flat
                 self.pub_colmap.publish(msg)
                 self.get_logger().info(f"📤 Published /cviss/waypoints/colmap: {msg.data}")
 
             message.ack()
+
         except Exception as e:
             self.get_logger().error(f"❌ Error occurred in _cb_colmap: {e}")
             message.nack()
-
 
     # ------------- Param change (optional) -------------
 
