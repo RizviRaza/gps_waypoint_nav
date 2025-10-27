@@ -18,7 +18,7 @@ def generate_launch_description():
             value=key_path
         ),
 
-        DeclareLaunchArgument("mode", default_value="gps"),
+        DeclareLaunchArgument("mode", default_value="utm"),
         DeclareLaunchArgument("project_id", default_value="cviss-waypoint-control"),
         DeclareLaunchArgument("gps_subscription", default_value="gps-sub"),
         DeclareLaunchArgument("utm_subscription", default_value="utm-sub"),

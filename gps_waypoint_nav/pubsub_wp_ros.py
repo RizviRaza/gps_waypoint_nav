@@ -29,7 +29,7 @@ from typing import Optional, List
 
 import rclpy
 from rclpy.node import Node
-from std_msgs.msg import String
+from std_msgs.msg import Float64MultiArray
 
 from google.cloud import pubsub_v1
 from google.api_core.exceptions import GoogleAPICallError
@@ -83,9 +83,9 @@ class PubSubListener(Node):
         self.subscriber = pubsub_v1.SubscriberClient()
 
         # ---- Optional ROS publishers ----
-        self.pub_gps = self.create_publisher(String, "/cviss/waypoints/gps", 10) if self.publish_ros else None
-        self.pub_utm = self.create_publisher(String, "/cviss/waypoints/utm", 10) if self.publish_ros else None
-        self.pub_colmap = self.create_publisher(String, "/cviss/waypoints/colmap", 10) if self.publish_ros else None
+        self.pub_gps = self.create_publisher(Float64MultiArray, "/towereye_wp", 10) if self.publish_ros else None
+        self.pub_utm = self.create_publisher(Float64MultiArray, "/cviss/waypoints/utm", 10) if self.publish_ros else None
+        self.pub_colmap = self.create_publisher(Float64MultiArray, "/cviss/waypoints/colmap", 10) if self.publish_ros else None
 
         # ---- Control for streaming futures ----
         self._streaming_future = None
@@ -201,11 +201,16 @@ class PubSubListener(Node):
             self.get_logger().info(f"Waypoint ID: {data.get('waypointId', 'N/A')}")
 
             coords = data.get("coordinates", {})
+            lon = coords.get("longitude")
+            lat = coords.get("latitude")
+            alt = coords.get("altitude")
+            azm = coords.get("azimuth")
+
             self.get_logger().info("\n🌍 GPS Coordinates (WGS84):")
-            self.get_logger().info(f"   Longitude: {coords.get('longitude')}")
-            self.get_logger().info(f"   Latitude:  {coords.get('latitude')}")
-            self.get_logger().info(f"   Altitude:  {coords.get('altitude')} m")
-            self.get_logger().info(f"   Azimuth:   {coords.get('azimuth')}°")
+            self.get_logger().info(f"   Longitude: {lon}")
+            self.get_logger().info(f"   Latitude:  {lat}")
+            self.get_logger().info(f"   Altitude:  {alt} m")
+            self.get_logger().info(f"   Azimuth:   {azm}°")
 
             if "timestamp" in data:
                 self.get_logger().info(f"\n⏰ Timestamp: {data['timestamp']}")
@@ -213,10 +218,13 @@ class PubSubListener(Node):
             self.get_logger().info("\n✅ Message processed")
             self.get_logger().info(pretty_line())
 
+            # ✅ Publish as Float64MultiArray
             if self.publish_ros and self.pub_gps is not None:
-                msg = String()
-                msg.data = json.dumps(data)
+                msg = Float64MultiArray()
+                # Order: [longitude, latitude, altitude, azimuth]
+                msg.data = [float(lon), float(lat), float(alt), float(azm)]
                 self.pub_gps.publish(msg)
+                self.get_logger().info(f"📤 Published /towereye_wp: {msg.data}")
 
             message.ack()
         except Exception as e:
@@ -232,11 +240,20 @@ class PubSubListener(Node):
             self.get_logger().info(f"Waypoint ID: {data.get('waypointId', 'N/A')}")
 
             coords = data.get("coordinates", {})
+            x = coords.get("x", 0.0)
+            y = coords.get("y", 0.0)
+            z = coords.get("z", 0.0)
+            azm = coords.get("azimuth", 0.0)
+            try:
+                x = float(x); y = float(y); z = float(z); azm = float(azm)
+            except (ValueError, TypeError):
+                self.get_logger().warn(f"⚠️ Some UTM fields not numeric: {coords}")
+
             self.get_logger().info("\n📍 UTM Coordinates (Zone 17N):")
-            self.get_logger().info(f"   X (Easting):  {coords.get('x')} m")
-            self.get_logger().info(f"   Y (Northing): {coords.get('y')} m")
-            self.get_logger().info(f"   Z (Altitude): {coords.get('z')} m")
-            self.get_logger().info(f"   Azimuth:      {coords.get('azimuth')}°")
+            self.get_logger().info(f"   X (Easting):  {x} m")
+            self.get_logger().info(f"   Y (Northing): {y} m")
+            self.get_logger().info(f"   Z (Altitude): {z} m")
+            self.get_logger().info(f"   Azimuth:      {azm}°")
 
             if "timestamp" in data:
                 self.get_logger().info(f"\n⏰ Timestamp: {data['timestamp']}")
@@ -245,14 +262,16 @@ class PubSubListener(Node):
             self.get_logger().info(pretty_line())
 
             if self.publish_ros and self.pub_utm is not None:
-                msg = String()
-                msg.data = json.dumps(data)
+                msg = Float64MultiArray()
+                msg.data = [x, y, z, azm]  # order fixed
                 self.pub_utm.publish(msg)
+                self.get_logger().info(f"📤 Published /cviss/waypoints/utm: {msg.data}")
 
             message.ack()
         except Exception as e:
-            self.get_logger().error(f"❌ Error occurred: {e}")
+            self.get_logger().error(f"❌ Error occurred in _cb_utm: {e}")
             message.nack()
+
 
     def _cb_colmap(self, message: pubsub_v1.subscriber.message.Message):
         try:
@@ -266,16 +285,30 @@ class PubSubListener(Node):
             position = coords.get("position", {})
             rotation = coords.get("rotation", {})
 
+            px = position.get("x", 0.0)
+            py = position.get("y", 0.0)
+            pz = position.get("z", 0.0)
+            qw = rotation.get("w", 1.0)
+            qx = rotation.get("x", 0.0)
+            qy = rotation.get("y", 0.0)
+            qz = rotation.get("z", 0.0)
+
+            try:
+                px = float(px); py = float(py); pz = float(pz)
+                qw = float(qw); qx = float(qx); qy = float(qy); qz = float(qz)
+            except (ValueError, TypeError):
+                self.get_logger().warn(f"⚠️ Some COLMAP fields not numeric: position={position}, rotation={rotation}")
+
             self.get_logger().info("\n📍 COLMAP Position:")
-            self.get_logger().info(f"   X: {position.get('x')}")
-            self.get_logger().info(f"   Y: {position.get('y')}")
-            self.get_logger().info(f"   Z: {position.get('z')}")
+            self.get_logger().info(f"   X: {px}")
+            self.get_logger().info(f"   Y: {py}")
+            self.get_logger().info(f"   Z: {pz}")
 
             self.get_logger().info("\n🔄 COLMAP Rotation (Quaternion):")
-            self.get_logger().info(f"   W: {rotation.get('w')}")
-            self.get_logger().info(f"   X: {rotation.get('x')}")
-            self.get_logger().info(f"   Y: {rotation.get('y')}")
-            self.get_logger().info(f"   Z: {rotation.get('z')}")
+            self.get_logger().info(f"   W: {qw}")
+            self.get_logger().info(f"   X: {qx}")
+            self.get_logger().info(f"   Y: {qy}")
+            self.get_logger().info(f"   Z: {qz}")
 
             if "timestamp" in data:
                 self.get_logger().info(f"\n⏰ Timestamp: {data['timestamp']}")
@@ -284,14 +317,17 @@ class PubSubListener(Node):
             self.get_logger().info(pretty_line())
 
             if self.publish_ros and self.pub_colmap is not None:
-                msg = String()
-                msg.data = json.dumps(data)
+                msg = Float64MultiArray()
+                # order: [px, py, pz, qw, qx, qy, qz]
+                msg.data = [px, py, pz, qw, qx, qy, qz]
                 self.pub_colmap.publish(msg)
+                self.get_logger().info(f"📤 Published /cviss/waypoints/colmap: {msg.data}")
 
             message.ack()
         except Exception as e:
-            self.get_logger().error(f"❌ Error occurred: {e}")
+            self.get_logger().error(f"❌ Error occurred in _cb_colmap: {e}")
             message.nack()
+
 
     # ------------- Param change (optional) -------------
 
