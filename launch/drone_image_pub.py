@@ -31,7 +31,7 @@ def generate_launch_description():
             namespace='',
             output='screen',
             arguments=[
-                'ffmpeg', 'raw',                 # or 'compressed'
+                'ffmpeg', 'compressed',                 # or 'compressed'
                 '--ros-args',
                 '--remap', 'in/ffmpeg:=/mavic_1/image/ffmpeg',
                 '--remap', 'out:=/mavic_1/decoded'
@@ -43,12 +43,11 @@ def generate_launch_description():
             ]
         ),
 
-
-        Node(
-            package='rqt_image_view',
-            executable='rqt_image_view',
-            name='rqt_image_view',
-            output='screen',
-            # arguments=['/mavic_1/decoded']
-        )
+        # Node(
+        #     package='rqt_image_view',
+        #     executable='rqt_image_view',
+        #     name='rqt_image_view',
+        #     output='screen',
+        #     # arguments=['/mavic_1/decoded']
+        # )
     ])
